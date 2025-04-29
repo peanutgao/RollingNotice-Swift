@@ -8,272 +8,361 @@
 
 import UIKit
 
-@objc public protocol GYRollingNoticeViewDataSource : NSObjectProtocol {
+// MARK: - GYRollingNoticeViewDataSource
+
+@objc public protocol GYRollingNoticeViewDataSource: NSObjectProtocol {
     func numberOfRowsFor(roolingView: GYRollingNoticeView) -> Int
-    func rollingNoticeView(roolingView: GYRollingNoticeView, cellAtIndex index: Int) -> GYNoticeViewCell
+    func rollingNoticeView(roolingView: GYRollingNoticeView, cellAtIndex index: Int)
+        -> GYNoticeViewCell
 }
+
+// MARK: - GYRollingNoticeViewDelegate
 
 @objc public protocol GYRollingNoticeViewDelegate: NSObjectProtocol {
     @objc optional func rollingNoticeView(_ roolingView: GYRollingNoticeView, didClickAt index: Int)
 }
 
+// MARK: - GYRollingNoticeViewStatus
+
 public enum GYRollingNoticeViewStatus: UInt {
     case idle, working, pause
 }
+
+// MARK: - GYRollingNoticeView
+
 open class GYRollingNoticeView: UIView {
-    weak open var dataSource : GYRollingNoticeViewDataSource?
-    weak open var delegate : GYRollingNoticeViewDelegate?
+    open weak var dataSource: GYRollingNoticeViewDataSource?
+    open weak var delegate: GYRollingNoticeViewDelegate?
     open var stayInterval = 2.0
     open private(set) var status: GYRollingNoticeViewStatus = .idle
     open var currentIndex: Int {
-        guard let count = (self.dataSource?.numberOfRowsFor(roolingView: self)) else { return 0}
-        
-        if (_cIdx > count - 1) {
+        guard let count = (dataSource?.numberOfRowsFor(roolingView: self)) else {
+            return 0
+        }
+
+        if _cIdx > count - 1 {
             _cIdx = 0
         }
-        return _cIdx;
+        return _cIdx
     }
-    
-    
+
     private var _cIdx = 0
     private var _needTryRoll = false
-    
-    
+
     // MARK: private properties
-    private lazy var cellClsDict: Dictionary = { () -> [String : Any] in
-        var tempDict = Dictionary<String, Any>()
+
+    private lazy var cellClsDict: Dictionary = { () -> [String: Any] in
+        var tempDict = [String: Any]()
         return tempDict
     }()
+
     private lazy var reuseCells: Array = { () -> [GYNoticeViewCell] in
-        var tempArr = Array<GYNoticeViewCell>()
+        var tempArr = [GYNoticeViewCell]()
         return tempArr
     }()
-    
+
     private var timer: Timer?
     private var currentCell: GYNoticeViewCell?
     private var willShowCell: GYNoticeViewCell?
     private var isAnimating = false
-    
+
     // MARK: -
+
     open func register(_ cellClass: Swift.AnyClass?, forCellReuseIdentifier identifier: String) {
-        self.cellClsDict[identifier] = cellClass
+        cellClsDict[identifier] = cellClass
     }
-    
+
     open func register(_ nib: UINib?, forCellReuseIdentifier identifier: String) {
-        self.cellClsDict[identifier] = nib
+        cellClsDict[identifier] = nib
     }
-    
+
     open func dequeueReusableCell(withIdentifier identifier: String) -> GYNoticeViewCell? {
-        for cell in self.reuseCells {
-            guard let reuseIdentifier = cell.reuseIdentifier else { return nil }
+        // 添加安全检查，确保identifier不为空
+        guard !identifier.isEmpty else {
+            return nil
+        }
+
+        // 先尝试从重用池中获取cell
+        for cell in reuseCells {
+            guard let reuseIdentifier = cell.reuseIdentifier else {
+                continue
+            }
             if reuseIdentifier.elementsEqual(identifier) {
+                // 找到后从重用池中移除
+                if let index = reuseCells.firstIndex(of: cell) {
+                    reuseCells.remove(at: index)
+                }
                 return cell
             }
         }
-        
-        if let cellCls = self.cellClsDict[identifier] {
+
+        // 如果重用池中没有可用的cell，创建新的cell
+        if let cellCls = cellClsDict[identifier] {
             if let nib = cellCls as? UINib {
                 let arr = nib.instantiate(withOwner: nil, options: nil)
-                if let cell = arr.first as? GYNoticeViewCell {
-                    cell.setValue(identifier, forKeyPath: "reuseIdentifier")
-                    return cell
+                guard let cell = arr.first as? GYNoticeViewCell else {
+                    return nil
                 }
-                return nil
+                
+                // 现在CustomNoticeCell和CustomNoticeCell2已经在awakeFromNib中设置了reuseIdentifier
+                // 如果仍然没有设置，输出警告但继续使用该cell
+                if cell.reuseIdentifier == nil && GYRollingDebugLog {
+                    print("警告: 从Xib加载的cell没有设置reuseIdentifier，可能会影响cell重用功能")
+                    print("提示: 请在cell的awakeFromNib方法中调用setup(withReuseIdentifier:)方法设置标识符")
+                }
+                
+                return cell
             }
-            
+
             if let noticeCellCls = cellCls as? GYNoticeViewCell.Type {
                 let cell = noticeCellCls.self.init(reuseIdentifier: identifier)
                 return cell
             }
-            
         }
         return nil
     }
-    
+
     open func reloadDataAndStartRoll() {
         stopRoll()
-        guard let count = self.dataSource?.numberOfRowsFor(roolingView: self), count > 0 else {
+        guard let count = dataSource?.numberOfRowsFor(roolingView: self), count > 0 else {
             return
         }
-        
+
         layoutCurrentCellAndWillShowCell()
-        
-        
-        
+
         guard count >= 2 else {
             return
         }
-        
-        timer = Timer.scheduledTimer(timeInterval: stayInterval, target: self, selector: #selector(GYRollingNoticeView.timerHandle), userInfo: nil, repeats: true)
-        if let __timer = timer {
-            RunLoop.current.add(__timer, forMode: .common)
+
+        timer = Timer.scheduledTimer(
+            timeInterval: stayInterval, target: self,
+            selector: #selector(GYRollingNoticeView.timerHandle), userInfo: nil, repeats: true
+        )
+        if let timer {
+            RunLoop.current.add(timer, forMode: .common)
         }
         resume()
-        
     }
-    
-    // 如果想要释放，请在合适的地方停止timer。 If you want to release, please stop the timer in the right place,for example '-viewDidDismiss'
+
     open func stopRoll() {
+        // 确保在主线程执行UI操作
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.stopRoll()
+            }
+            return
+        }
         
+        // 先停止定时器，防止在清理过程中触发新的动画
         if let rollTimer = timer {
             rollTimer.invalidate()
             timer = nil
         }
-        
+
         status = .idle
         isAnimating = false
         _cIdx = 0
-        currentCell?.removeFromSuperview()
-        willShowCell?.removeFromSuperview()
+
+        // 先保存引用，再清空属性，最后执行移除操作
+        // 这样可以避免可能的野指针问题
+        let tempCurrentCell = currentCell
+        let tempWillShowCell = willShowCell
+
         currentCell = nil
         willShowCell = nil
-        self.reuseCells.removeAll()
+
+        // 移除子视图
+        tempCurrentCell?.removeFromSuperview()
+        tempWillShowCell?.removeFromSuperview()
+        
+        // 清空重用池
+        for cell in reuseCells {
+            cell.removeFromSuperview()
+        }
+        reuseCells.removeAll()
     }
-    
+
     open func pause() {
-        if let __timer = timer {
-            __timer.fireDate = Date.distantFuture
+        if let timer {
+            timer.fireDate = Date.distantFuture
             status = .pause
         }
     }
-    
+
     open func resume() {
-        if let __timer = timer {
-            __timer.fireDate = Date.distantPast
+        if let timer {
+            timer.fireDate = Date.distantPast
             status = .working
         }
     }
-    
-    
+
     override public init(frame: CGRect) {
         super.init(frame: frame)
-        self.setupNoticeViews()
+        setupNoticeViews()
     }
-    
-    required public init?(coder aDecoder: NSCoder) {
+
+    public required init?(coder aDecoder: NSCoder) {
         super.init(coder: aDecoder)
-        self.setupNoticeViews()
+        setupNoticeViews()
     }
-    
-    override open func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-    }
-    open override func layoutSubviews() {
+
+    override open func touchesBegan(_: Set<UITouch>, with _: UIEvent?) {}
+
+    override open func layoutSubviews() {
         super.layoutSubviews()
-        if (_needTryRoll) {
-            self.reloadDataAndStartRoll()
+        if _needTryRoll {
+            reloadDataAndStartRoll()
             _needTryRoll = false
         }
     }
-    
+
+    deinit {
+        stopRoll()
+    }
 }
 
 // MARK: private funcs
-extension GYRollingNoticeView{
-    
-    @objc fileprivate func timerHandle() {
+
+private extension GYRollingNoticeView {
+    @objc func timerHandle() {
         if isAnimating {
             return
         }
+
+        guard let dataSource,
+              dataSource.numberOfRowsFor(roolingView: self) > 0
+        else {
+            return
+        }
+
         layoutCurrentCellAndWillShowCell()
-        
-        
-        let w = self.frame.size.width
-        let h = self.frame.size.height
-        
+
+        guard let currentCell = self.currentCell, let willShowCell = self.willShowCell else {
+            return
+        }
+
+        let width = frame.size.width
+        let height = frame.size.height
+
         isAnimating = true
-        UIView.animate(withDuration: 0.5, animations: {
-            self.currentCell?.frame = CGRect(x: 0, y: -h, width: w, height: h)
-            self.willShowCell?.frame = CGRect(x: 0, y: 0, width: w, height: h)
-        }) { (flag) in
-            if let cell0 = self.currentCell, let cell1 = self.willShowCell {
-                self.reuseCells.append(cell0)
-                cell0.removeFromSuperview()
-                self.currentCell = cell1
+        
+        // 保留对当前执行动画的cell的强引用，确保动画过程中不会被释放
+        let animatingCurrentCell = currentCell
+        let animatingWillShowCell = willShowCell
+        
+        UIView.animate(
+            withDuration: 0.5,
+            animations: {
+                animatingCurrentCell.frame = CGRect(x: 0, y: -height, width: width, height: height)
+                animatingWillShowCell.frame = CGRect(x: 0, y: 0, width: width, height: height)
             }
+        ) { [weak self] finished in
+            guard let self = self, finished else {
+                return
+            }
+
+            // 检查动画完成时，当前cell和即将显示的cell是否仍然是原来的引用
+            // 这可以防止在动画过程中cell被改变导致的问题
+            if self.currentCell === animatingCurrentCell && self.willShowCell === animatingWillShowCell {
+                // 确保只有在动画正常完成时才进行cell的切换
+                let cellToReuse = self.currentCell
+                self.currentCell = self.willShowCell
+                self.willShowCell = nil
+                
+                // 修复条件绑定问题
+                if let cellToReuse = cellToReuse {
+                    // 先从视图层次结构中移除，然后再加入重用池
+                    cellToReuse.removeFromSuperview()
+                    self.reuseCells.append(cellToReuse)
+                }
+            } else {
+                // 如果引用已变化，可能是stopRoll被调用或其他异常情况
+                // 只清理不再使用的视图，避免引用冲突
+                animatingCurrentCell.removeFromSuperview()
+                // 不要将其加入重用池，因为当前状态可能已不一致
+            }
+            
             self.isAnimating = false
             self._cIdx += 1
         }
     }
-    
-    
-    fileprivate func layoutCurrentCellAndWillShowCell() {
-        guard let count = (self.dataSource?.numberOfRowsFor(roolingView: self)) else { return }
-        
-        if (_cIdx > count - 1) {
+
+    func layoutCurrentCellAndWillShowCell() {
+        guard let dataSource else {
+            return
+        }
+        let count = dataSource.numberOfRowsFor(roolingView: self)
+        guard count > 0 else {
+            return
+        }
+
+        if _cIdx > count - 1 {
             _cIdx = 0
         }
-        
+
         var willShowIndex = _cIdx + 1
-        if (willShowIndex > count - 1) {
+        if willShowIndex > count - 1 {
             willShowIndex = 0
         }
-        //    print(">>>>%d", _cIdx)
-        
-        let w = self.frame.size.width
-        let h = self.frame.size.height
-        
-//        print("count: \(count),  _cIdx:\(_cIdx)  willShowIndex: \(willShowIndex)")
-        
-        if !(w > 0 && h > 0) {
+
+        let width = frame.size.width
+        let height = frame.size.height
+
+        if !(width > 0 && height > 0) {
             _needTryRoll = true
             return
         }
-        
+
+        // 安全获取cell，处理可能返回nil的情况
         if currentCell == nil {
-            // 第一次没有currentcell
-            // currentcell is null at first time
-            if let cell = self.dataSource?.rollingNoticeView(roolingView: self, cellAtIndex: _cIdx) {
-                currentCell = cell
-                cell.frame  = CGRect(x: 0, y: 0, width: w, height: h)
-                self.addSubview(cell)
-            }
-            
+            let cell = dataSource.rollingNoticeView(roolingView: self, cellAtIndex: _cIdx)
+            currentCell = cell
+            cell.frame = CGRect(x: 0, y: 0, width: width, height: height)
+            addSubview(cell)
             return
         }
+
+        let nextCell = dataSource.rollingNoticeView(roolingView: self, cellAtIndex: willShowIndex)
         
+        // 确保之前的willShowCell被正确清理
+        willShowCell?.removeFromSuperview()
+        willShowCell = nextCell
+        nextCell.frame = CGRect(x: 0, y: height, width: width, height: height)
+        addSubview(nextCell)
         
-        if let cell = self.dataSource?.rollingNoticeView(roolingView: self, cellAtIndex: willShowIndex) {
-            willShowCell = cell
-            cell.frame = CGRect(x: 0, y: h, width: w, height: h)
-            self.addSubview(cell)
-        }
-        
-        
-        
-        guard let _cCell = currentCell, let _wCell = willShowCell else {
+        // 确保必需的cell都存在 - 修复条件绑定问题
+        // 因为currentCell和willShowCell不是可选类型的局部变量，所以不需要条件绑定
+        if currentCell == nil || willShowCell == nil {
             return
         }
+
         if GYRollingDebugLog {
-            print(String(format: "currentCell  %p", _cCell))
-            print(String(format: "willShowCell %p", _wCell))
+            print("currentCell: ", currentCell)
+            print("willShowCell: ", willShowCell)
         }
-        
-        let currentCellIdx = self.reuseCells.firstIndex(of: _cCell)
-        let willShowCellIdx = self.reuseCells.firstIndex(of: _wCell)
-        
-        if let index = currentCellIdx {
-            self.reuseCells.remove(at: index)
+
+        // 安全移除cell引用，避免重复添加或移除
+        if let currentCell = self.currentCell, let currentCellIdx = reuseCells.firstIndex(of: currentCell) {
+            reuseCells.remove(at: currentCellIdx)
         }
-        
-        if let index = willShowCellIdx {
-            self.reuseCells.remove(at: index)
+
+        if let willShowCell = self.willShowCell, let willShowCellIdx = reuseCells.firstIndex(of: willShowCell) {
+            reuseCells.remove(at: willShowCellIdx)
         }
-        
     }
-    
-    @objc fileprivate func handleCellTapAction(){
-        self.delegate?.rollingNoticeView?(self, didClickAt: self.currentIndex)
+
+    @objc func handleCellTapAction() {
+        delegate?.rollingNoticeView?(self, didClickAt: currentIndex)
     }
-    
-    fileprivate func setupNoticeViews() {
-        self.clipsToBounds = true
-        self.addGestureRecognizer(self.createTapGesture())
+
+    func setupNoticeViews() {
+        clipsToBounds = true
+        addGestureRecognizer(createTapGesture())
     }
-    
-    fileprivate func createTapGesture() -> UITapGestureRecognizer {
-        return UITapGestureRecognizer(target: self, action: #selector(GYRollingNoticeView.handleCellTapAction))
+
+    func createTapGesture() -> UITapGestureRecognizer {
+        UITapGestureRecognizer(
+            target: self, action: #selector(GYRollingNoticeView.handleCellTapAction)
+        )
     }
-    
 }
-
-
