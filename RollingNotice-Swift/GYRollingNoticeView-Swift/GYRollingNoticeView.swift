@@ -103,14 +103,14 @@ open class GYRollingNoticeView: UIView {
                 guard let cell = arr.first as? GYNoticeViewCell else {
                     return nil
                 }
-                
+
                 // 现在CustomNoticeCell和CustomNoticeCell2已经在awakeFromNib中设置了reuseIdentifier
                 // 如果仍然没有设置，输出警告但继续使用该cell
-                if cell.reuseIdentifier == nil && GYRollingDebugLog {
+                if cell.reuseIdentifier == nil, GYRollingDebugLog {
                     print("警告: 从Xib加载的cell没有设置reuseIdentifier，可能会影响cell重用功能")
                     print("提示: 请在cell的awakeFromNib方法中调用setup(withReuseIdentifier:)方法设置标识符")
                 }
-                
+
                 return cell
             }
 
@@ -152,7 +152,7 @@ open class GYRollingNoticeView: UIView {
             }
             return
         }
-        
+
         // 先停止定时器，防止在清理过程中触发新的动画
         if let rollTimer = timer {
             rollTimer.invalidate()
@@ -174,7 +174,7 @@ open class GYRollingNoticeView: UIView {
         // 移除子视图
         tempCurrentCell?.removeFromSuperview()
         tempWillShowCell?.removeFromSuperview()
-        
+
         // 清空重用池
         for cell in reuseCells {
             cell.removeFromSuperview()
@@ -237,7 +237,7 @@ private extension GYRollingNoticeView {
 
         layoutCurrentCellAndWillShowCell()
 
-        guard let currentCell = self.currentCell, let willShowCell = self.willShowCell else {
+        guard let currentCell, let willShowCell else {
             return
         }
 
@@ -245,11 +245,11 @@ private extension GYRollingNoticeView {
         let height = frame.size.height
 
         isAnimating = true
-        
+
         // 保留对当前执行动画的cell的强引用，确保动画过程中不会被释放
         let animatingCurrentCell = currentCell
         let animatingWillShowCell = willShowCell
-        
+
         UIView.animate(
             withDuration: 0.5,
             animations: {
@@ -257,23 +257,23 @@ private extension GYRollingNoticeView {
                 animatingWillShowCell.frame = CGRect(x: 0, y: 0, width: width, height: height)
             }
         ) { [weak self] finished in
-            guard let self = self, finished else {
+            guard let self, finished else {
                 return
             }
 
             // 检查动画完成时，当前cell和即将显示的cell是否仍然是原来的引用
             // 这可以防止在动画过程中cell被改变导致的问题
-            if self.currentCell === animatingCurrentCell && self.willShowCell === animatingWillShowCell {
+            if self.currentCell === animatingCurrentCell, self.willShowCell === animatingWillShowCell {
                 // 确保只有在动画正常完成时才进行cell的切换
                 let cellToReuse = self.currentCell
                 self.currentCell = self.willShowCell
                 self.willShowCell = nil
-                
+
                 // 修复条件绑定问题
-                if let cellToReuse = cellToReuse {
+                if let cellToReuse {
                     // 先从视图层次结构中移除，然后再加入重用池
                     cellToReuse.removeFromSuperview()
-                    self.reuseCells.append(cellToReuse)
+                    reuseCells.append(cellToReuse)
                 }
             } else {
                 // 如果引用已变化，可能是stopRoll被调用或其他异常情况
@@ -281,9 +281,9 @@ private extension GYRollingNoticeView {
                 animatingCurrentCell.removeFromSuperview()
                 // 不要将其加入重用池，因为当前状态可能已不一致
             }
-            
-            self.isAnimating = false
-            self._cIdx += 1
+
+            isAnimating = false
+            _cIdx += 1
         }
     }
 
@@ -323,13 +323,13 @@ private extension GYRollingNoticeView {
         }
 
         let nextCell = dataSource.rollingNoticeView(roolingView: self, cellAtIndex: willShowIndex)
-        
+
         // 确保之前的willShowCell被正确清理
         willShowCell?.removeFromSuperview()
         willShowCell = nextCell
         nextCell.frame = CGRect(x: 0, y: height, width: width, height: height)
         addSubview(nextCell)
-        
+
         // 确保必需的cell都存在 - 修复条件绑定问题
         // 因为currentCell和willShowCell不是可选类型的局部变量，所以不需要条件绑定
         if currentCell == nil || willShowCell == nil {
@@ -342,11 +342,11 @@ private extension GYRollingNoticeView {
         }
 
         // 安全移除cell引用，避免重复添加或移除
-        if let currentCell = self.currentCell, let currentCellIdx = reuseCells.firstIndex(of: currentCell) {
+        if let currentCell, let currentCellIdx = reuseCells.firstIndex(of: currentCell) {
             reuseCells.remove(at: currentCellIdx)
         }
 
-        if let willShowCell = self.willShowCell, let willShowCellIdx = reuseCells.firstIndex(of: willShowCell) {
+        if let willShowCell, let willShowCellIdx = reuseCells.firstIndex(of: willShowCell) {
             reuseCells.remove(at: willShowCellIdx)
         }
     }
